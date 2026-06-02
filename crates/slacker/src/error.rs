@@ -18,6 +18,7 @@ enum Kind {
     MissingInput,
     MissingValue(&'static str),
     NoCandidate { max_bytes: u64 },
+    NoMediaSource,
     TenorMediaNotFound(String),
     TooManyInputs,
     UnknownArg(String),
@@ -53,6 +54,10 @@ impl Error {
         Self { kind: Kind::NoCandidate { max_bytes } }
     }
 
+    pub(super) fn no_media_source() -> Self {
+        Self { kind: Kind::NoMediaSource }
+    }
+
     pub(super) fn tenor_media_not_found(page: String) -> Self {
         Self { kind: Kind::TenorMediaNotFound(page) }
     }
@@ -86,6 +91,7 @@ impl Display for Error {
             Kind::NoCandidate { max_bytes } => {
                 write!(formatter, "could not make a GIF under {max_bytes} bytes")
             }
+            Kind::NoMediaSource => write!(formatter, "no media URL to download"),
             Kind::TenorMediaNotFound(page) => {
                 write!(formatter, "could not find a Tenor media URL on {page}")
             }

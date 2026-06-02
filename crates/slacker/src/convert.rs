@@ -89,16 +89,17 @@ struct Materialized {
 
 fn materialize(fetch: &Fetch, scratch: &Path) -> Result<Materialized, Error> {
     match fetch {
-        Fetch::Url(url) => {
-            download(url, scratch)?;
+        Fetch::Url(urls) => {
+            download_first(urls, scratch)?;
             Ok(Materialized { path: scratch.to_path_buf(), temporary: true })
         }
         Fetch::TenorPage(page) => {
             let html = fetch_text(page)?;
-            let Some(media) = source::extract_tenor_media(&html) else {
+            let candidates = source::extract_tenor_media(&html);
+            if candidates.is_empty() {
                 return Err(Error::tenor_media_not_found(page.clone()));
-            };
-            download(&media, scratch)?;
+            }
+            download_first(&candidates, scratch)?;
             Ok(Materialized { path: scratch.to_path_buf(), temporary: true })
         }
         Fetch::File(path) => Ok(Materialized { path: path.clone(), temporary: false }),
@@ -128,6 +129,17 @@ fn convert_first_fit(
     Err(Error::no_candidate(TARGET_BYTES))
 }
 
+fn download_first(urls: &[String], path: &Path) -> Result<(), Error> {
+    let mut last = None;
+    for url in urls {
+        match download(url, path) {
+            Ok(()) => return Ok(()),
+            Err(error) => last = Some(error),
+        }
+    }
+    Err(last.unwrap_or_else(Error::no_media_source))
+}
+
 fn download(url: &str, path: &Path) -> Result<(), Error> {
     run(
         Command::new("curl")
@@ -138,7 +150,7 @@ fn download(url: &str, path: &Path) -> Result<(), Error> {
             .arg(url)
             .arg("-o")
             .arg(path),
-        "download GIPHY GIF",
+        "download media",
     )
 }
 

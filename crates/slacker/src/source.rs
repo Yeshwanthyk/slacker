@@ -20,8 +20,12 @@ pub struct Source {
 /// How `convert` should obtain the source media.
 #[derive(Debug)]
 pub enum Fetch {
-    /// Download a direct media URL.
-    Url(String),
+    /// Download the first reachable URL from an ordered candidate list.
+    ///
+    /// Candidates are ordered best-source-first: a full-quality clip (`.mp4`)
+    /// before an already-quantized `.gif`, so `FFmpeg` builds its palette from
+    /// the richest available frames.
+    Url(Vec<String>),
     /// Fetch a Tenor view page, scrape its media URL, then download it.
     TenorPage(String),
     /// Read an existing local file in place.
@@ -77,7 +81,7 @@ fn resolve_url(input: &str) -> Result<Source, Error> {
         return resolve_imgur(input, clean);
     }
     if has_media_extension(clean) {
-        return Ok(Source { name_hint: stem_of(clean), fetch: Fetch::Url(input.to_owned()) });
+        return Ok(Source { name_hint: stem_of(clean), fetch: Fetch::Url(vec![input.to_owned()]) });
     }
     Err(Error::unsupported_source(input.to_owned()))
 }
@@ -86,20 +90,23 @@ fn resolve_giphy(input: &str, clean: &str) -> Result<Source, Error> {
     let Some(id) = giphy_id(clean) else {
         return Err(Error::bad_giphy_url(input.to_owned()));
     };
-    let media_url = format!("https://media.giphy.com/media/{id}/giphy.gif");
-    Ok(Source { name_hint: id.to_owned(), fetch: Fetch::Url(media_url) })
+    let candidates = vec![
+        format!("https://media.giphy.com/media/{id}/giphy.mp4"),
+        format!("https://media.giphy.com/media/{id}/giphy.gif"),
+    ];
+    Ok(Source { name_hint: id.to_owned(), fetch: Fetch::Url(candidates) })
 }
 
 fn resolve_tenor(input: &str, clean: &str, host: &str) -> Source {
     if host.starts_with("media") || has_media_extension(clean) {
-        return Source { name_hint: stem_of(clean), fetch: Fetch::Url(input.to_owned()) };
+        return Source { name_hint: stem_of(clean), fetch: Fetch::Url(vec![input.to_owned()]) };
     }
     Source { name_hint: tenor_hint(clean), fetch: Fetch::TenorPage(input.to_owned()) }
 }
 
 fn resolve_imgur(input: &str, clean: &str) -> Result<Source, Error> {
     if has_media_extension(clean) {
-        return Ok(Source { name_hint: stem_of(clean), fetch: Fetch::Url(input.to_owned()) });
+        return Ok(Source { name_hint: stem_of(clean), fetch: Fetch::Url(vec![input.to_owned()]) });
     }
     // Albums and galleries are containers, not single images, and cannot map to
     // a direct `i.imgur.com/{id}` media URL.
@@ -113,18 +120,20 @@ fn resolve_imgur(input: &str, clean: &str) -> Result<Source, Error> {
     if !is_imgur_id(id) {
         return Err(Error::unsupported_source(input.to_owned()));
     }
-    let media_url = format!("https://i.imgur.com/{id}.gif");
-    Ok(Source { name_hint: id.to_owned(), fetch: Fetch::Url(media_url) })
+    let candidates =
+        vec![format!("https://i.imgur.com/{id}.mp4"), format!("https://i.imgur.com/{id}.gif")];
+    Ok(Source { name_hint: id.to_owned(), fetch: Fetch::Url(candidates) })
 }
 
 fn is_imgur_id(id: &str) -> bool {
     (4..=12).contains(&id.len()) && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
-/// Scrapes a Tenor media URL from a fetched view-page body.
+/// Scrapes Tenor media URLs from a fetched view-page body.
 ///
-/// Prefers an animated `.gif`, falling back to an `.mp4` clip.
-pub fn extract_tenor_media(html: &str) -> Option<String> {
+/// Returns ordered download candidates: the full-quality `.mp4` clip first, then
+/// the `.gif`. Either may be absent; an empty result means nothing was found.
+pub fn extract_tenor_media(html: &str) -> Vec<String> {
     let mut gif = None;
     let mut mp4 = None;
 
@@ -137,14 +146,14 @@ pub fn extract_tenor_media(html: &str) -> Option<String> {
         if !host_of(&url).is_some_and(|host| host_matches(host, "tenor.com")) {
             continue;
         }
-        if gif.is_none() && url.ends_with(".gif") {
-            gif = Some(url);
-        } else if mp4.is_none() && url.ends_with(".mp4") {
+        if mp4.is_none() && url.ends_with(".mp4") {
             mp4 = Some(url);
+        } else if gif.is_none() && url.ends_with(".gif") {
+            gif = Some(url);
         }
     }
 
-    gif.or(mp4)
+    [mp4, gif].into_iter().flatten().collect()
 }
 
 fn is_url_char(character: char) -> bool {
@@ -242,11 +251,15 @@ mod tests {
     }
 
     #[test]
-    fn giphy_slug_builds_media_url() {
+    fn giphy_slug_prefers_mp4_then_gif() {
         match fetch_of("https://giphy.com/gifs/name-HB4aJElNd7JMas9WSU") {
-            Fetch::Url(url) => {
-                assert_eq!(url, "https://media.giphy.com/media/HB4aJElNd7JMas9WSU/giphy.gif");
-            }
+            Fetch::Url(urls) => assert_eq!(
+                urls,
+                vec![
+                    String::from("https://media.giphy.com/media/HB4aJElNd7JMas9WSU/giphy.mp4"),
+                    String::from("https://media.giphy.com/media/HB4aJElNd7JMas9WSU/giphy.gif"),
+                ],
+            ),
             other => panic!("unexpected fetch: {other:?}"),
         }
     }
@@ -254,8 +267,10 @@ mod tests {
     #[test]
     fn giphy_media_url_round_trips() {
         match fetch_of("https://media.giphy.com/media/HB4aJElNd7JMas9WSU/giphy.gif") {
-            Fetch::Url(url) => {
-                assert_eq!(url, "https://media.giphy.com/media/HB4aJElNd7JMas9WSU/giphy.gif");
+            Fetch::Url(urls) => {
+                assert!(urls.contains(&String::from(
+                    "https://media.giphy.com/media/HB4aJElNd7JMas9WSU/giphy.gif"
+                )));
             }
             other => panic!("unexpected fetch: {other:?}"),
         }
@@ -264,7 +279,13 @@ mod tests {
     #[test]
     fn imgur_page_maps_to_direct_media() {
         match fetch_of("https://imgur.com/abc123") {
-            Fetch::Url(url) => assert_eq!(url, "https://i.imgur.com/abc123.gif"),
+            Fetch::Url(urls) => assert_eq!(
+                urls,
+                vec![
+                    String::from("https://i.imgur.com/abc123.mp4"),
+                    String::from("https://i.imgur.com/abc123.gif"),
+                ],
+            ),
             other => panic!("unexpected fetch: {other:?}"),
         }
     }
@@ -272,7 +293,9 @@ mod tests {
     #[test]
     fn direct_media_url_downloads_as_is() {
         match fetch_of("https://example.com/path/clip.mp4?token=1") {
-            Fetch::Url(url) => assert_eq!(url, "https://example.com/path/clip.mp4?token=1"),
+            Fetch::Url(urls) => {
+                assert_eq!(urls, vec![String::from("https://example.com/path/clip.mp4?token=1")]);
+            }
             other => panic!("unexpected fetch: {other:?}"),
         }
     }
@@ -309,21 +332,30 @@ mod tests {
     }
 
     #[test]
-    fn tenor_scrape_prefers_gif_over_mp4() {
-        let html = r#"<meta content="https://media1.tenor.com/m/key/clip.mp4">
-            <meta property="og:image" content="https://media1.tenor.com/m/key/clip.gif">"#;
+    fn tenor_scrape_orders_mp4_before_gif() {
+        let html = r#"<meta property="og:image" content="https://media1.tenor.com/m/key/clip.gif">
+            <source src="https://media1.tenor.com/m/key/clip.mp4" type="video/mp4">"#;
         assert_eq!(
-            extract_tenor_media(html).as_deref(),
-            Some("https://media1.tenor.com/m/key/clip.gif"),
+            extract_tenor_media(html),
+            vec![
+                String::from("https://media1.tenor.com/m/key/clip.mp4"),
+                String::from("https://media1.tenor.com/m/key/clip.gif"),
+            ],
         );
     }
 
     #[test]
-    fn tenor_scrape_falls_back_to_mp4() {
-        let html = r#"<source src="https://media.tenor.com/key/clip.mp4" type="video/mp4">"#;
+    fn tenor_scrape_returns_gif_only_when_no_mp4() {
+        let html = r#"<meta content="https://media.tenor.com/key/clip.gif">"#;
         assert_eq!(
-            extract_tenor_media(html).as_deref(),
-            Some("https://media.tenor.com/key/clip.mp4"),
+            extract_tenor_media(html),
+            vec![String::from("https://media.tenor.com/key/clip.gif")],
         );
+    }
+
+    #[test]
+    fn tenor_scrape_ignores_foreign_hosts() {
+        let html = r#"<a href="https://evil.example.com/x?from=tenor.com/y.gif">"#;
+        assert!(extract_tenor_media(html).is_empty());
     }
 }
