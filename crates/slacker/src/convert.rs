@@ -6,6 +6,7 @@ use std::process::Command;
 use crate::args::Config;
 use crate::error::Error;
 use crate::source::{self, Fetch};
+use crate::upload::{self, Target};
 
 const TARGET_BYTES: u64 = 120_000;
 const PROFILES: [Profile; 12] = [
@@ -34,6 +35,8 @@ pub struct Product {
     pub name: String,
     /// Output GIF path.
     pub path: PathBuf,
+    /// Whether the emoji was uploaded to Slack.
+    pub uploaded: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +59,9 @@ pub fn make(config: &Config) -> Result<Product, Error> {
         .as_deref()
         .map(sanitize_name)
         .unwrap_or_else(|| sanitize_name(&source.name_hint));
+    // Resolve upload credentials up front so a misconfigured `--upload` fails
+    // before any download or conversion work.
+    let target = if config.upload { Some(Target::resolve(config.team.as_deref())?) } else { None };
     let output = config.out_dir.join(format!("{name}.gif"));
     let scratch = config.out_dir.join(format!(".slacker-{name}-source"));
     let candidate = config.out_dir.join(format!(".slacker-{name}-candidate.gif"));
@@ -69,11 +75,17 @@ pub fn make(config: &Config) -> Result<Product, Error> {
             return Err(error);
         }
     };
-    let product = convert_first_fit(&materialized.path, &candidate, &output, &name, config.json);
+    let result = convert_first_fit(&materialized.path, &candidate, &output, &name, config.json);
     if materialized.temporary {
         discard(remove_file(&scratch));
     }
-    product
+
+    let mut product = result?;
+    if let Some(target) = target {
+        upload::send(&target, &product.path, &product.name)?;
+        product.uploaded = true;
+    }
+    Ok(product)
 }
 
 /// Drops a best-effort cleanup result; a failed temp-file removal must not mask
@@ -122,7 +134,13 @@ fn convert_first_fit(
         let bytes = file_len(candidate)?;
         if bytes <= TARGET_BYTES {
             rename(candidate, output)?;
-            return Ok(Product { bytes, json, name: name.to_owned(), path: output.to_path_buf() });
+            return Ok(Product {
+                bytes,
+                json,
+                name: name.to_owned(),
+                path: output.to_path_buf(),
+                uploaded: false,
+            });
         }
         remove_file(candidate)?;
     }

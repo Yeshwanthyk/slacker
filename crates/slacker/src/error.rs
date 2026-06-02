@@ -16,9 +16,11 @@ enum Kind {
     Help,
     Io { action: &'static str, path: PathBuf, source: io::Error },
     MissingInput,
+    MissingSlackConfig(&'static str),
     MissingValue(&'static str),
     NoCandidate { max_bytes: u64 },
     NoMediaSource,
+    SlackUpload(String),
     TenorMediaNotFound(String),
     TooManyInputs,
     UnknownArg(String),
@@ -46,6 +48,10 @@ impl Error {
         Self { kind: Kind::MissingInput }
     }
 
+    pub(super) fn missing_slack_config(setting: &'static str) -> Self {
+        Self { kind: Kind::MissingSlackConfig(setting) }
+    }
+
     pub(super) fn missing_value(flag: &'static str) -> Self {
         Self { kind: Kind::MissingValue(flag) }
     }
@@ -56,6 +62,10 @@ impl Error {
 
     pub(super) fn no_media_source() -> Self {
         Self { kind: Kind::NoMediaSource }
+    }
+
+    pub(super) fn slack_upload(detail: String) -> Self {
+        Self { kind: Kind::SlackUpload(detail) }
     }
 
     pub(super) fn tenor_media_not_found(page: String) -> Self {
@@ -87,11 +97,15 @@ impl Display for Error {
                 write!(formatter, "{action} {}: {source}", path.display())
             }
             Kind::MissingInput => write!(formatter, "missing input\n{}", usage()),
+            Kind::MissingSlackConfig(setting) => {
+                write!(formatter, "--upload needs {setting}")
+            }
             Kind::MissingValue(flag) => write!(formatter, "{flag} needs a value"),
             Kind::NoCandidate { max_bytes } => {
                 write!(formatter, "could not make a GIF under {max_bytes} bytes")
             }
             Kind::NoMediaSource => write!(formatter, "no media URL to download"),
+            Kind::SlackUpload(detail) => write!(formatter, "Slack rejected the upload: {detail}"),
             Kind::TenorMediaNotFound(page) => {
                 write!(formatter, "could not find a Tenor media URL on {page}")
             }

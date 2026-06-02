@@ -4,6 +4,7 @@ mod args;
 mod convert;
 mod error;
 pub mod source;
+pub mod upload;
 
 pub use args::{Config, parse};
 pub use convert::{Product, make};

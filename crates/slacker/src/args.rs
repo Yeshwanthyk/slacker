@@ -9,6 +9,8 @@ pub struct Config {
     pub(super) name: Option<String>,
     pub(super) out_dir: PathBuf,
     pub(super) input: String,
+    pub(super) upload: bool,
+    pub(super) team: Option<String>,
 }
 
 /// Parses `slacker` command-line arguments.
@@ -22,12 +24,16 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Config, Error> {
     let mut json = false;
     let mut name = None;
     let mut input = None;
+    let mut upload = false;
+    let mut team = None;
     let mut iter = args;
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--help" | "-h" => return Err(Error::help()),
             "--json" => json = true,
+            "--upload" => upload = true,
+            "--team" => team = Some(value_string(&mut iter, "--team")?),
             "--out-dir" | "-o" => out_dir = value_path(&mut iter, "--out-dir")?,
             "--name" | "-n" => name = Some(value_string(&mut iter, "--name")?),
             "make" if input.is_none() => {}
@@ -42,7 +48,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Config, Error> {
         return Err(Error::missing_input());
     };
 
-    Ok(Config { json, name, out_dir, input })
+    Ok(Config { json, name, out_dir, input, upload, team })
 }
 
 fn value_path(
@@ -91,5 +97,20 @@ mod tests {
 
         assert_eq!(config.name.as_deref(), Some("wave"));
         assert_eq!(config.out_dir.to_string_lossy(), "out");
+    }
+
+    #[test]
+    fn accepts_upload_and_team() {
+        let config = match parse(
+            ["--upload", "--team", "acme", "https://giphy.com/gifs/name-ID123abc"]
+                .into_iter()
+                .map(String::from),
+        ) {
+            Ok(value) => value,
+            Err(error) => panic!("parse failed: {error}"),
+        };
+
+        assert!(config.upload);
+        assert_eq!(config.team.as_deref(), Some("acme"));
     }
 }
