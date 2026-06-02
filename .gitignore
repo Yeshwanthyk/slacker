@@ -1,0 +1,6 @@
+/target
+node_modules/
+coverage/
+.DS_Store
+*.gif
+!fixtures/**/*.gif
