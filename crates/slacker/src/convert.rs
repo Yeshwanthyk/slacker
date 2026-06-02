@@ -1,10 +1,11 @@
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::args::Config;
 use crate::error::Error;
-use crate::giphy;
+use crate::source::{self, Fetch};
 
 const TARGET_BYTES: u64 = 120_000;
 const PROFILES: [Profile; 12] = [
@@ -42,24 +43,70 @@ struct Profile {
     colors: u16,
 }
 
-/// Downloads and converts the configured GIPHY link.
+/// Resolves the configured input, fetches it, and converts it to a Slack emoji.
 ///
 /// # Errors
 ///
-/// Returns an error when the GIPHY URL cannot be parsed, required external
+/// Returns an error when the input cannot be resolved, required external
 /// commands fail, filesystem writes fail, or no candidate fits Slack's size cap.
 pub fn make(config: &Config) -> Result<Product, Error> {
-    let gif = giphy::parse(&config.url)?;
-    let name = config.name.as_deref().map(sanitize_name).unwrap_or_else(|| sanitize_name(&gif.id));
+    let source = source::resolve(&config.input)?;
+    let name = config
+        .name
+        .as_deref()
+        .map(sanitize_name)
+        .unwrap_or_else(|| sanitize_name(&source.name_hint));
     let output = config.out_dir.join(format!("{name}.gif"));
-    let source = config.out_dir.join(format!(".slacker-{name}-source.gif"));
+    let scratch = config.out_dir.join(format!(".slacker-{name}-source"));
     let candidate = config.out_dir.join(format!(".slacker-{name}-candidate.gif"));
 
     create_dir(&config.out_dir)?;
-    download(&gif.media_url, &source)?;
-    let product = convert_first_fit(&source, &candidate, &output, &name, config.json);
-    remove_file(&source)?;
+    let materialized = match materialize(&source.fetch, &scratch) {
+        Ok(value) => value,
+        Err(error) => {
+            // A partial download may have written `scratch` before failing.
+            discard(remove_file(&scratch));
+            return Err(error);
+        }
+    };
+    let product = convert_first_fit(&materialized.path, &candidate, &output, &name, config.json);
+    if materialized.temporary {
+        discard(remove_file(&scratch));
+    }
     product
+}
+
+/// Drops a best-effort cleanup result; a failed temp-file removal must not mask
+/// the real conversion outcome.
+fn discard(_outcome: Result<(), Error>) {}
+
+/// The on-disk media to convert and whether it is a scratch file we own.
+#[derive(Debug)]
+struct Materialized {
+    path: PathBuf,
+    temporary: bool,
+}
+
+fn materialize(fetch: &Fetch, scratch: &Path) -> Result<Materialized, Error> {
+    match fetch {
+        Fetch::Url(url) => {
+            download(url, scratch)?;
+            Ok(Materialized { path: scratch.to_path_buf(), temporary: true })
+        }
+        Fetch::TenorPage(page) => {
+            let html = fetch_text(page)?;
+            let Some(media) = source::extract_tenor_media(&html) else {
+                return Err(Error::tenor_media_not_found(page.clone()));
+            };
+            download(&media, scratch)?;
+            Ok(Materialized { path: scratch.to_path_buf(), temporary: true })
+        }
+        Fetch::File(path) => Ok(Materialized { path: path.clone(), temporary: false }),
+        Fetch::Stdin => {
+            read_stdin(scratch)?;
+            Ok(Materialized { path: scratch.to_path_buf(), temporary: true })
+        }
+    }
 }
 
 fn convert_first_fit(
@@ -93,6 +140,34 @@ fn download(url: &str, path: &Path) -> Result<(), Error> {
             .arg(path),
         "download GIPHY GIF",
     )
+}
+
+fn fetch_text(url: &str) -> Result<String, Error> {
+    let output = Command::new("curl")
+        .arg("--fail")
+        .arg("--location")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg(url)
+        .output()
+        .map_err(|source| Error::io("fetch page", PathBuf::from("curl"), source))?;
+    if !output.status.success() {
+        return Err(Error::command_failed(
+            "fetch page",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn read_stdin(path: &Path) -> Result<(), Error> {
+    let mut buffer = Vec::new();
+    io::stdin()
+        .read_to_end(&mut buffer)
+        .map_err(|source| Error::io("read standard input", path.to_path_buf(), source))?;
+    fs::write(path, buffer)
+        .map_err(|source| Error::io("write source file", path.to_path_buf(), source))
 }
 
 fn convert(source: &Path, output: &Path, profile: Profile) -> Result<(), Error> {
@@ -165,7 +240,7 @@ fn rename(from: &Path, to: &Path) -> Result<(), Error> {
 fn remove_file(path: &Path) -> Result<(), Error> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(source) => Err(Error::io("remove temp file", path.to_path_buf(), source)),
     }
 }

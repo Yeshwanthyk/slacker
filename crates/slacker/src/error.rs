@@ -15,11 +15,13 @@ enum Kind {
     CommandFailed { action: &'static str, status: ExitStatus, stderr: String },
     Help,
     Io { action: &'static str, path: PathBuf, source: io::Error },
-    MissingUrl,
+    MissingInput,
     MissingValue(&'static str),
     NoCandidate { max_bytes: u64 },
-    TooManyUrls,
+    TenorMediaNotFound(String),
+    TooManyInputs,
     UnknownArg(String),
+    UnsupportedSource(String),
 }
 
 impl Error {
@@ -39,8 +41,8 @@ impl Error {
         Self { kind: Kind::Io { action, path, source } }
     }
 
-    pub(super) fn missing_url() -> Self {
-        Self { kind: Kind::MissingUrl }
+    pub(super) fn missing_input() -> Self {
+        Self { kind: Kind::MissingInput }
     }
 
     pub(super) fn missing_value(flag: &'static str) -> Self {
@@ -51,12 +53,20 @@ impl Error {
         Self { kind: Kind::NoCandidate { max_bytes } }
     }
 
-    pub(super) fn too_many_urls() -> Self {
-        Self { kind: Kind::TooManyUrls }
+    pub(super) fn tenor_media_not_found(page: String) -> Self {
+        Self { kind: Kind::TenorMediaNotFound(page) }
+    }
+
+    pub(super) fn too_many_inputs() -> Self {
+        Self { kind: Kind::TooManyInputs }
     }
 
     pub(super) fn unknown_arg(arg: String) -> Self {
         Self { kind: Kind::UnknownArg(arg) }
+    }
+
+    pub(super) fn unsupported_source(input: String) -> Self {
+        Self { kind: Kind::UnsupportedSource(input) }
     }
 }
 
@@ -71,13 +81,21 @@ impl Display for Error {
             Kind::Io { action, path, source } => {
                 write!(formatter, "{action} {}: {source}", path.display())
             }
-            Kind::MissingUrl => write!(formatter, "missing GIPHY url\n{}", usage()),
+            Kind::MissingInput => write!(formatter, "missing input\n{}", usage()),
             Kind::MissingValue(flag) => write!(formatter, "{flag} needs a value"),
             Kind::NoCandidate { max_bytes } => {
                 write!(formatter, "could not make a GIF under {max_bytes} bytes")
             }
-            Kind::TooManyUrls => write!(formatter, "pass exactly one GIPHY url"),
+            Kind::TenorMediaNotFound(page) => {
+                write!(formatter, "could not find a Tenor media URL on {page}")
+            }
+            Kind::TooManyInputs => write!(formatter, "pass exactly one input"),
             Kind::UnknownArg(arg) => write!(formatter, "unknown argument {arg}"),
+            Kind::UnsupportedSource(input) => write!(
+                formatter,
+                "unsupported input {input}: expected a GIPHY/Tenor/Imgur link, \
+                 a direct media URL, a local file, or - for stdin"
+            ),
         }
     }
 }
@@ -85,7 +103,7 @@ impl Display for Error {
 impl std::error::Error for Error {}
 
 fn usage() -> String {
-    format!("usage: {} <giphy-url> [--out-dir DIR] [--name NAME] [--json]", command_name())
+    format!("usage: {} <url|file|-> [--name NAME] [--out-dir DIR] [--json]", command_name())
 }
 
 fn command_name() -> String {

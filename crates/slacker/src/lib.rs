@@ -3,7 +3,7 @@
 mod args;
 mod convert;
 mod error;
-pub mod giphy;
+pub mod source;
 
 pub use args::{Config, parse};
 pub use convert::{Product, make};
