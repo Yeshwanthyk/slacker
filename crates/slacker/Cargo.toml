@@ -1,0 +1,14 @@
+[package]
+name = "slacker"
+description = "Tiny GIPHY-to-Slack-emoji converter."
+edition.workspace = true
+license.workspace = true
+readme = "../../README.md"
+rust-version.workspace = true
+version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
