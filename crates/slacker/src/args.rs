@@ -9,8 +9,6 @@ pub struct Config {
     pub(super) name: Option<String>,
     pub(super) out_dir: PathBuf,
     pub(super) input: String,
-    pub(super) upload: bool,
-    pub(super) team: Option<String>,
     pub(super) max_bytes: u64,
     pub(super) max_frames: u32,
     pub(super) pad: bool,
@@ -35,8 +33,6 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Config, Error> {
     let mut json = false;
     let mut name = None;
     let mut input = None;
-    let mut upload = false;
-    let mut team = None;
     let mut max_bytes = DEFAULT_MAX_BYTES;
     let mut max_frames = DEFAULT_MAX_FRAMES;
     let mut pad = false;
@@ -47,9 +43,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Config, Error> {
         match arg.as_str() {
             "--help" | "-h" => return Err(Error::help()),
             "--json" => json = true,
-            "--upload" => upload = true,
             "--force" => force = true,
-            "--team" => team = Some(value_string(&mut iter, "--team")?),
             "--out-dir" | "-o" => out_dir = value_path(&mut iter, "--out-dir")?,
             "--name" | "-n" => name = Some(value_string(&mut iter, "--name")?),
             "--max-bytes" => max_bytes = value_u64(&mut iter, "--max-bytes")?,
@@ -67,7 +61,7 @@ pub fn parse(args: impl Iterator<Item = String>) -> Result<Config, Error> {
         return Err(Error::missing_input());
     };
 
-    Ok(Config { json, name, out_dir, input, upload, team, max_bytes, max_frames, pad, force })
+    Ok(Config { json, name, out_dir, input, max_bytes, max_frames, pad, force })
 }
 
 fn value_path(
@@ -141,21 +135,6 @@ mod tests {
 
         assert_eq!(config.name.as_deref(), Some("wave"));
         assert_eq!(config.out_dir.to_string_lossy(), "out");
-    }
-
-    #[test]
-    fn accepts_upload_and_team() {
-        let config = match parse(
-            ["--upload", "--team", "acme", "https://giphy.com/gifs/name-ID123abc"]
-                .into_iter()
-                .map(String::from),
-        ) {
-            Ok(value) => value,
-            Err(error) => panic!("parse failed: {error}"),
-        };
-
-        assert!(config.upload);
-        assert_eq!(config.team.as_deref(), Some("acme"));
     }
 
     #[test]

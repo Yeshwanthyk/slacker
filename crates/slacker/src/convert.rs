@@ -6,7 +6,6 @@ use std::process::Command;
 use crate::args::Config;
 use crate::error::Error;
 use crate::source::{self, Fetch};
-use crate::upload::{self, Target};
 
 /// Upper bound on the sanitized emoji name length.
 const MAX_NAME_LEN: usize = 64;
@@ -37,8 +36,6 @@ pub struct Product {
     pub name: String,
     /// Output GIF path.
     pub path: PathBuf,
-    /// Whether the emoji was uploaded to Slack.
-    pub uploaded: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -73,9 +70,6 @@ pub fn make(config: &Config) -> Result<Product, Error> {
         .as_deref()
         .map(sanitize_name)
         .unwrap_or_else(|| sanitize_name(&source.name_hint));
-    // Resolve upload credentials up front so a misconfigured `--upload` fails
-    // before any download or conversion work.
-    let target = if config.upload { Some(Target::resolve(config.team.as_deref())?) } else { None };
     let output = config.out_dir.join(format!("{name}.gif"));
     if !config.force && output.exists() {
         return Err(Error::output_exists(output));
@@ -100,12 +94,7 @@ pub fn make(config: &Config) -> Result<Product, Error> {
         discard(remove_file(&scratch));
     }
 
-    let mut product = result?;
-    if let Some(target) = target {
-        upload::send(&target, &product.path, &product.name)?;
-        product.uploaded = true;
-    }
-    Ok(product)
+    result
 }
 
 fn ensure_tool(tool: &'static str, version_flag: &str) -> Result<(), Error> {
@@ -163,13 +152,7 @@ fn convert_first_fit(
         let bytes = file_len(candidate)?;
         if bytes <= encode.max_bytes {
             rename(candidate, output)?;
-            return Ok(Product {
-                bytes,
-                json,
-                name: name.to_owned(),
-                path: output.to_path_buf(),
-                uploaded: false,
-            });
+            return Ok(Product { bytes, json, name: name.to_owned(), path: output.to_path_buf() });
         }
         remove_file(candidate)?;
     }

@@ -17,13 +17,11 @@ enum Kind {
     InvalidValue { flag: &'static str, value: String },
     Io { action: &'static str, path: PathBuf, source: io::Error },
     MissingInput,
-    MissingSlackConfig(&'static str),
     MissingTool(&'static str),
     MissingValue(&'static str),
     NoCandidate { max_bytes: u64 },
     NoMediaSource,
     OutputExists(PathBuf),
-    SlackUpload(String),
     TenorMediaNotFound(String),
     TooManyInputs,
     UnknownArg(String),
@@ -55,10 +53,6 @@ impl Error {
         Self { kind: Kind::MissingInput }
     }
 
-    pub(super) fn missing_slack_config(setting: &'static str) -> Self {
-        Self { kind: Kind::MissingSlackConfig(setting) }
-    }
-
     pub(super) fn missing_tool(tool: &'static str) -> Self {
         Self { kind: Kind::MissingTool(tool) }
     }
@@ -77,10 +71,6 @@ impl Error {
 
     pub(super) fn output_exists(path: PathBuf) -> Self {
         Self { kind: Kind::OutputExists(path) }
-    }
-
-    pub(super) fn slack_upload(detail: String) -> Self {
-        Self { kind: Kind::SlackUpload(detail) }
     }
 
     pub(super) fn tenor_media_not_found(page: String) -> Self {
@@ -115,9 +105,6 @@ impl Display for Error {
                 write!(formatter, "{action} {}: {source}", path.display())
             }
             Kind::MissingInput => write!(formatter, "missing input\n{}", usage()),
-            Kind::MissingSlackConfig(setting) => {
-                write!(formatter, "--upload needs {setting}")
-            }
             Kind::MissingTool(tool) => {
                 write!(formatter, "{tool} was not found on PATH; please install it")
             }
@@ -129,7 +116,6 @@ impl Display for Error {
             Kind::OutputExists(path) => {
                 write!(formatter, "{} already exists; pass --force to overwrite", path.display())
             }
-            Kind::SlackUpload(detail) => write!(formatter, "Slack rejected the upload: {detail}"),
             Kind::TenorMediaNotFound(page) => {
                 write!(formatter, "could not find a Tenor media URL on {page}")
             }
@@ -149,7 +135,7 @@ impl std::error::Error for Error {}
 fn usage() -> String {
     format!(
         "usage: {} <url|file|-> [--name NAME] [--out-dir DIR] [--fit crop|pad]\n  \
-         [--max-bytes N] [--max-frames N] [--force] [--upload] [--team SUBDOMAIN] [--json]",
+         [--max-bytes N] [--max-frames N] [--force] [--json]",
         command_name()
     )
 }

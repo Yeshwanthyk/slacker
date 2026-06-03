@@ -23,14 +23,11 @@ fn write_success(product: &Product) -> ExitCode {
     let result = if product.json {
         writeln!(
             out,
-            "{{\"path\":\"{}\",\"bytes\":{},\"name\":\"{}\",\"uploaded\":{}}}",
+            "{{\"path\":\"{}\",\"bytes\":{},\"name\":\"{}\"}}",
             product.path.display(),
             product.bytes,
-            product.name,
-            product.uploaded
+            product.name
         )
-    } else if product.uploaded {
-        writeln!(out, "{} (uploaded as :{}:)", product.path.display(), product.name)
     } else {
         writeln!(out, "{}", product.path.display())
     };

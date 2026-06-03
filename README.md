@@ -1,72 +1,65 @@
 # slacker
 
-Tiny Rust CLI for turning a link or clip into a Slack-ready custom emoji GIF.
+Turn a link or video clip into a Slack-ready custom emoji GIF.
 
-## Usage
+Slack caps custom emoji at 128 KiB. `slacker` downloads the source, crops it
+square, and steps down through size/frame-rate/color profiles until the GIF
+fits, all by driving `ffmpeg`. No Rust dependencies.
 
-```bash
-slacker '<input>' [flags]
-```
-
-`<input>` can be:
-
-- a **GIPHY** link (`https://giphy.com/gifs/...`)
-- a **Tenor** view page (`https://tenor.com/view/...-gif-123`)
-- an **Imgur** link (`https://imgur.com/abc123`)
-- any **direct media URL** (`.gif`, `.mp4`, `.webp`, `.webm`, `.mov`)
-- a **local file** path
-- `-` to read media from **stdin**
-
-For remote clips the full-quality `.mp4` is preferred over an already-quantized
-`.gif`, so the palette is built from the richest available frames.
+## Install
 
 ```bash
-slacker 'https://giphy.com/gifs/cigarette-HB4aJElNd7JMas9WSU' \
-  --name hill_cigarette --out-dir ~/Downloads
+cargo build --release
+cp target/release/slacker ~/bin/   # or anywhere on your PATH
 ```
 
-### Flags
+Needs `curl` and `ffmpeg` on your PATH.
+
+## Examples
+
+```bash
+# GIPHY link
+slacker 'https://giphy.com/gifs/cigarette-HB4aJElNd7JMas9WSU' --name hill_cigarette
+
+# Local file into a chosen directory
+slacker ./reaction.mov --out-dir ~/Downloads --name shrug
+
+# Pipe from stdin
+curl -s https://example.com/clip.mp4 | slacker - --name wave
+```
+
+## Inputs
+
+`slacker <input>` accepts:
+
+- GIPHY links — `https://giphy.com/gifs/...`
+- Tenor view pages — `https://tenor.com/view/...-gif-123`
+- Imgur links — `https://imgur.com/abc123`
+- direct media URLs — `.gif`, `.mp4`, `.webp`, `.webm`, `.mov`
+- local file paths
+- `-` for stdin
+
+For remote clips the `.mp4` is preferred over the `.gif` when both exist, so the
+palette is built from cleaner source frames.
+
+## Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--name NAME` | derived from input | Emoji name (sanitized, capped at 64 chars). |
+| `--name NAME` | derived from input | Emoji name (lowercased, non-word chars become `_`, capped at 64). |
 | `--out-dir DIR` | `/tmp` | Output directory. |
-| `--fit crop\|pad` | `crop` | `crop` center-crops to a square; `pad` letterboxes the whole frame with a transparent border. |
-| `--max-bytes N` | `120000` | Size budget. Slack's hard cap is 128 KiB. |
-| `--max-frames N` | `50` | Frames kept from the source clip. |
+| `--fit crop\|pad` | `crop` | `crop` center-crops to a square; `pad` shrinks the whole frame and adds a transparent border. |
+| `--max-bytes N` | `120000` | Size budget. Slack's hard limit is 128 KiB. |
+| `--max-frames N` | `50` | Frames kept from the source. |
 | `--force` | off | Overwrite an existing output file. |
-| `--upload` | off | Upload the result to Slack (see below). |
-| `--team SUBDOMAIN` | `$SLACK_TEAM` | Workspace subdomain for `--upload`. |
-| `--json` | off | Emit machine-readable output. |
+| `--json` | off | Print `{"path":...,"bytes":...,"name":...}` instead of just the path. |
 
-Agent-friendly output:
+## How it works
 
-```bash
-slacker '<input>' --name hill_cigarette --json
-# {"path":"...","bytes":108535,"name":"hill_cigarette","uploaded":false}
-```
+The output is built by trying a fixed ladder of profiles — descending
+dimensions (128 → 80 px), frame rates, and color counts — and keeping the first
+result at or under `--max-bytes`. Long clips are trimmed to `--max-frames`.
 
-## Uploading to Slack
+## License
 
-Slack has no official public emoji-add API, so `--upload` posts to the
-workspace's internal `emoji.add` endpoint, matching how community emoji tooling
-works. Credentials come from the environment:
-
-- `SLACK_TOKEN` (required): an `xoxc`/`xoxs`/`xoxp` token with emoji rights.
-- `SLACK_TEAM` (or `--team`): the workspace subdomain in `<team>.slack.com`.
-- `SLACK_COOKIE` (optional): the `d` cookie value, required for `xoxc` tokens.
-
-The token and cookie are passed through a private `curl --config` file (mode
-`0600`), so they never appear in the process table.
-
-```bash
-SLACK_TOKEN=xoxc-… SLACK_TEAM=acme SLACK_COOKIE=… \
-  slacker 'https://giphy.com/gifs/…' --name wave --upload
-```
-
-## Requirements
-
-- `curl`
-- `ffmpeg`
-
-The binary has no Rust crate dependencies. Media work is delegated to FFmpeg.
+MIT OR Apache-2.0.
