@@ -31,29 +31,31 @@ esac
 
 target="${cpu}-${platform}"
 archive="${BIN}-${target}.tar.gz"
+checksum="${BIN}-${target}.sha256"
 
 if [ "$VERSION" = "latest" ]; then
   base="https://github.com/${REPO}/releases/latest/download"
 else
   base="https://github.com/${REPO}/releases/download/${VERSION}"
 fi
-url="${base}/${archive}"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-echo "slacker: downloading ${url}"
-curl -fSL --proto '=https' --tlsv1.2 "$url" -o "${tmp}/${archive}"
+echo "slacker: downloading ${base}/${archive}"
+curl -fSL --proto '=https' --tlsv1.2 "${base}/${archive}" -o "${tmp}/${archive}"
 
-if curl -fsSL "${url}.sha256" -o "${tmp}/${archive}.sha256" 2>/dev/null; then
+if curl -fsSL --proto '=https' --tlsv1.2 "${base}/${checksum}" -o "${tmp}/${checksum}" 2>/dev/null; then
   echo "slacker: verifying checksum"
   if command -v sha256sum >/dev/null 2>&1; then
-    (cd "$tmp" && sha256sum -c "${archive}.sha256")
+    (cd "$tmp" && sha256sum -c "${checksum}")
   elif command -v shasum >/dev/null 2>&1; then
-    (cd "$tmp" && shasum -a 256 -c "${archive}.sha256")
+    (cd "$tmp" && shasum -a 256 -c "${checksum}")
   else
     echo "slacker: no checksum tool found, skipping verification" >&2
   fi
+else
+  echo "slacker: checksum not available, skipping verification" >&2
 fi
 
 tar -xzf "${tmp}/${archive}" -C "$tmp"
