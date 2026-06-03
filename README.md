@@ -8,12 +8,24 @@ fits, all by driving `ffmpeg`. No Rust dependencies.
 
 ## Install
 
+Needs `curl` and `ffmpeg` on your PATH at runtime.
+
+**Prebuilt binary** (macOS and Linux, arm64/x64):
+
 ```bash
-cargo build --release
-cp target/release/slacker ~/bin/   # or anywhere on your PATH
+curl -fsSL https://raw.githubusercontent.com/Yeshwanthyk/slacker/main/install.sh | sh
 ```
 
-Needs `curl` and `ffmpeg` on your PATH.
+Installs to `~/.local/bin`. Override with `SLACKER_INSTALL_DIR=...` or pin a
+release with `SLACKER_VERSION=v0.1.0`. The script verifies the SHA-256 checksum.
+Prefer to read before you pipe? Inspect [`install.sh`](install.sh) first, or
+grab the archive yourself from the [releases page](https://github.com/Yeshwanthyk/slacker/releases).
+
+**From source** (needs a Rust toolchain):
+
+```bash
+cargo install --git https://github.com/Yeshwanthyk/slacker --locked slacker
+```
 
 ## Examples
 
