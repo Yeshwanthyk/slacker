@@ -8,7 +8,9 @@ use crate::error::Error;
 use crate::source::{self, Fetch};
 use crate::upload::{self, Target};
 
-const TARGET_BYTES: u64 = 120_000;
+/// Upper bound on the sanitized emoji name length.
+const MAX_NAME_LEN: usize = 64;
+
 const PROFILES: [Profile; 12] = [
     Profile { size: 128, fps: 10, colors: 64 },
     Profile { size: 128, fps: 8, colors: 64 },
@@ -46,13 +48,25 @@ struct Profile {
     colors: u16,
 }
 
+/// Caller-tunable encoding limits applied to every profile in the ladder.
+#[derive(Clone, Copy, Debug)]
+struct Encode {
+    max_bytes: u64,
+    max_frames: u32,
+    pad: bool,
+}
+
 /// Resolves the configured input, fetches it, and converts it to a Slack emoji.
 ///
 /// # Errors
 ///
-/// Returns an error when the input cannot be resolved, required external
-/// commands fail, filesystem writes fail, or no candidate fits Slack's size cap.
+/// Returns an error when a required tool is missing, the input cannot be
+/// resolved, the output already exists without `--force`, external commands
+/// fail, filesystem writes fail, or no candidate fits the size cap.
 pub fn make(config: &Config) -> Result<Product, Error> {
+    ensure_tool("curl", "--version")?;
+    ensure_tool("ffmpeg", "-version")?;
+
     let source = source::resolve(&config.input)?;
     let name = config
         .name
@@ -63,8 +77,13 @@ pub fn make(config: &Config) -> Result<Product, Error> {
     // before any download or conversion work.
     let target = if config.upload { Some(Target::resolve(config.team.as_deref())?) } else { None };
     let output = config.out_dir.join(format!("{name}.gif"));
+    if !config.force && output.exists() {
+        return Err(Error::output_exists(output));
+    }
     let scratch = config.out_dir.join(format!(".slacker-{name}-source"));
     let candidate = config.out_dir.join(format!(".slacker-{name}-candidate.gif"));
+    let encode =
+        Encode { max_bytes: config.max_bytes, max_frames: config.max_frames, pad: config.pad };
 
     create_dir(&config.out_dir)?;
     let materialized = match materialize(&source.fetch, &scratch) {
@@ -75,7 +94,8 @@ pub fn make(config: &Config) -> Result<Product, Error> {
             return Err(error);
         }
     };
-    let result = convert_first_fit(&materialized.path, &candidate, &output, &name, config.json);
+    let result =
+        convert_first_fit(&materialized.path, &candidate, &output, &name, config.json, encode);
     if materialized.temporary {
         discard(remove_file(&scratch));
     }
@@ -86,6 +106,14 @@ pub fn make(config: &Config) -> Result<Product, Error> {
         product.uploaded = true;
     }
     Ok(product)
+}
+
+fn ensure_tool(tool: &'static str, version_flag: &str) -> Result<(), Error> {
+    match Command::new(tool).arg(version_flag).output() {
+        Ok(_) => Ok(()),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Err(Error::missing_tool(tool)),
+        Err(source) => Err(Error::io("check tool", PathBuf::from(tool), source)),
+    }
 }
 
 /// Drops a best-effort cleanup result; a failed temp-file removal must not mask
@@ -128,11 +156,12 @@ fn convert_first_fit(
     output: &Path,
     name: &str,
     json: bool,
+    encode: Encode,
 ) -> Result<Product, Error> {
     for profile in PROFILES {
-        convert(source, candidate, profile)?;
+        convert(source, candidate, profile, encode)?;
         let bytes = file_len(candidate)?;
-        if bytes <= TARGET_BYTES {
+        if bytes <= encode.max_bytes {
             rename(candidate, output)?;
             return Ok(Product {
                 bytes,
@@ -144,7 +173,7 @@ fn convert_first_fit(
         }
         remove_file(candidate)?;
     }
-    Err(Error::no_candidate(TARGET_BYTES))
+    Err(Error::no_candidate(encode.max_bytes))
 }
 
 fn download_first(urls: &[String], path: &Path) -> Result<(), Error> {
@@ -200,13 +229,26 @@ fn read_stdin(path: &Path) -> Result<(), Error> {
         .map_err(|source| Error::io("write source file", path.to_path_buf(), source))
 }
 
-fn convert(source: &Path, output: &Path, profile: Profile) -> Result<(), Error> {
+fn convert(source: &Path, output: &Path, profile: Profile, encode: Encode) -> Result<(), Error> {
+    let size = profile.size;
+    let geometry = if encode.pad {
+        // Preserve the whole frame: fit inside the square, then pad with a
+        // transparent border so nothing is cropped away.
+        format!(
+            "scale={size}:{size}:force_original_aspect_ratio=decrease:flags=lanczos,\
+             format=rgba,pad={size}:{size}:(ow-iw)/2:(oh-ih)/2:color=#00000000"
+        )
+    } else {
+        // Center-crop to a square, then scale.
+        format!("crop=min(iw\\,ih):min(iw\\,ih),scale={size}:{size}:flags=lanczos")
+    };
     let filter = format!(
-        "fps={},trim=end_frame=50,setpts=PTS-STARTPTS,\
-         crop=min(iw\\,ih):min(iw\\,ih),scale={}:{}:flags=lanczos,\
-         split[s0][s1];[s0]palettegen=max_colors={}:stats_mode=diff[p];\
+        "fps={fps},trim=end_frame={frames},setpts=PTS-STARTPTS,{geometry},\
+         split[s0][s1];[s0]palettegen=max_colors={colors}:stats_mode=diff[p];\
          [s1][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle",
-        profile.fps, profile.size, profile.size, profile.colors
+        fps = profile.fps,
+        frames = encode.max_frames,
+        colors = profile.colors
     );
 
     run(
@@ -242,6 +284,9 @@ fn run(command: &mut Command, action: &'static str) -> Result<(), Error> {
 fn sanitize_name(id: &str) -> String {
     let mut name = String::new();
     for char in id.chars() {
+        if name.len() >= MAX_NAME_LEN {
+            break;
+        }
         if char.is_ascii_alphanumeric() {
             name.push(char.to_ascii_lowercase());
         } else if char == '-' || char == '_' || char.is_ascii_whitespace() {
@@ -249,7 +294,8 @@ fn sanitize_name(id: &str) -> String {
         }
     }
 
-    if name.is_empty() { String::from("emoji") } else { name }
+    let trimmed = name.trim_matches('_');
+    if trimmed.is_empty() { String::from("emoji") } else { trimmed.to_owned() }
 }
 
 fn create_dir(path: &Path) -> Result<(), Error> {
@@ -272,5 +318,27 @@ fn remove_file(path: &Path) -> Result<(), Error> {
         Ok(()) => Ok(()),
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(source) => Err(Error::io("remove temp file", path.to_path_buf(), source)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_NAME_LEN, sanitize_name};
+
+    #[test]
+    fn sanitizes_and_lowercases() {
+        assert_eq!(sanitize_name("Hill Cigarette!"), "hill_cigarette");
+    }
+
+    #[test]
+    fn caps_long_names_and_trims_edges() {
+        let name = sanitize_name(&"a-".repeat(100));
+        assert!(name.len() <= MAX_NAME_LEN, "len was {}", name.len());
+        assert!(!name.starts_with('_') && !name.ends_with('_'), "got: {name}");
+    }
+
+    #[test]
+    fn falls_back_when_empty() {
+        assert_eq!(sanitize_name("!!!"), "emoji");
     }
 }

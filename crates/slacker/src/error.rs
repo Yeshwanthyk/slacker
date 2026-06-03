@@ -14,12 +14,15 @@ enum Kind {
     BadGiphyUrl(String),
     CommandFailed { action: &'static str, status: ExitStatus, stderr: String },
     Help,
+    InvalidValue { flag: &'static str, value: String },
     Io { action: &'static str, path: PathBuf, source: io::Error },
     MissingInput,
     MissingSlackConfig(&'static str),
+    MissingTool(&'static str),
     MissingValue(&'static str),
     NoCandidate { max_bytes: u64 },
     NoMediaSource,
+    OutputExists(PathBuf),
     SlackUpload(String),
     TenorMediaNotFound(String),
     TooManyInputs,
@@ -40,6 +43,10 @@ impl Error {
         Self { kind: Kind::Help }
     }
 
+    pub(super) fn invalid_value(flag: &'static str, value: String) -> Self {
+        Self { kind: Kind::InvalidValue { flag, value } }
+    }
+
     pub(super) fn io(action: &'static str, path: PathBuf, source: io::Error) -> Self {
         Self { kind: Kind::Io { action, path, source } }
     }
@@ -52,6 +59,10 @@ impl Error {
         Self { kind: Kind::MissingSlackConfig(setting) }
     }
 
+    pub(super) fn missing_tool(tool: &'static str) -> Self {
+        Self { kind: Kind::MissingTool(tool) }
+    }
+
     pub(super) fn missing_value(flag: &'static str) -> Self {
         Self { kind: Kind::MissingValue(flag) }
     }
@@ -62,6 +73,10 @@ impl Error {
 
     pub(super) fn no_media_source() -> Self {
         Self { kind: Kind::NoMediaSource }
+    }
+
+    pub(super) fn output_exists(path: PathBuf) -> Self {
+        Self { kind: Kind::OutputExists(path) }
     }
 
     pub(super) fn slack_upload(detail: String) -> Self {
@@ -93,6 +108,9 @@ impl Display for Error {
                 write!(formatter, "{action} failed with {status}: {}", stderr.trim())
             }
             Kind::Help => write!(formatter, "{}", usage()),
+            Kind::InvalidValue { flag, value } => {
+                write!(formatter, "{flag} got an invalid value: {value}")
+            }
             Kind::Io { action, path, source } => {
                 write!(formatter, "{action} {}: {source}", path.display())
             }
@@ -100,11 +118,17 @@ impl Display for Error {
             Kind::MissingSlackConfig(setting) => {
                 write!(formatter, "--upload needs {setting}")
             }
+            Kind::MissingTool(tool) => {
+                write!(formatter, "{tool} was not found on PATH; please install it")
+            }
             Kind::MissingValue(flag) => write!(formatter, "{flag} needs a value"),
             Kind::NoCandidate { max_bytes } => {
                 write!(formatter, "could not make a GIF under {max_bytes} bytes")
             }
             Kind::NoMediaSource => write!(formatter, "no media URL to download"),
+            Kind::OutputExists(path) => {
+                write!(formatter, "{} already exists; pass --force to overwrite", path.display())
+            }
             Kind::SlackUpload(detail) => write!(formatter, "Slack rejected the upload: {detail}"),
             Kind::TenorMediaNotFound(page) => {
                 write!(formatter, "could not find a Tenor media URL on {page}")
@@ -123,7 +147,11 @@ impl Display for Error {
 impl std::error::Error for Error {}
 
 fn usage() -> String {
-    format!("usage: {} <url|file|-> [--name NAME] [--out-dir DIR] [--json]", command_name())
+    format!(
+        "usage: {} <url|file|-> [--name NAME] [--out-dir DIR] [--fit crop|pad]\n  \
+         [--max-bytes N] [--max-frames N] [--force] [--upload] [--team SUBDOMAIN] [--json]",
+        command_name()
+    )
 }
 
 fn command_name() -> String {
